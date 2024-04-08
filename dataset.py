@@ -1,5 +1,6 @@
 from collections import namedtuple
 import numpy as np
+import math
 import torch
 import pdb
 from torch.utils.data import DataLoader, TensorDataset
@@ -23,13 +24,15 @@ class ParkingDataset(torch.utils.data.Dataset):
         '''
         n_traj = len(self.data)
         array = self.data.reshape(n_traj * 28, -1)
-        normed = self.normalizer(array).normalize(array)
+        self.normalizer = self.normalizer(array)
+        normed = self.normalizer.normalize(array)
         self.data = normed.reshape(n_traj, 28, -1)
     # add speed
     def get_parking_trajectories(self):
         # Initialize an empty list for trajectories
         path = '../dlp-dataset/data/DJI_00'
-        for i in range(12,13):
+        self.data = []
+        for i in range(1, 31):
             ds = Dataset()
             if i >= 10:
                 ds.load(path + str(i))
@@ -38,7 +41,7 @@ class ParkingDataset(torch.utils.data.Dataset):
             
             scene = ds.get('scene', ds.list_scenes()[0])
             agents = scene['agents']
-            self.data = []
+            print("LOADING TRAINING DATA FILE: " + str(i))
 
             for agent_token in agents:
                 agent = ds.get('agent', agent_token)
@@ -48,26 +51,53 @@ class ParkingDataset(torch.utils.data.Dataset):
                     traj = []
                     while instance_token != '':
                         instance = ds.get('instance', instance_token)
-                        traj.append([instance["coords"][0], instance["coords"][1], instance["speed"]])
+                        #included heading here
+                        traj.append([instance["coords"][0], instance["coords"][1], instance["speed"], instance["heading"]])
                         if ds._inside_parking_area(instance_token) and instance['speed'] < 0.02:
                             if not_parked > 700:
                                 traj = traj[-700:]  
-                                sample_traj = np.array(traj[::25])  
+                                sample_traj = np.array(traj[::25]) 
+
+                                # adjusted_traj[3] doesnt necesarly correspond to the correct heading angle, <I 
                                 
-                                adjusted_traj = sample_traj - np.array([instance["coords"][0], instance["coords"][1], 0.0])
-                                reflectx1_traj = adjusted_traj * np.array([1.0, -1.0, 1.0])
-                                reflectx2_traj = adjusted_traj * np.array([-1.0, -1.0, 1.0])
-                                reflectx3_traj = adjusted_traj * np.array([-1.0, 1.0, 1.0])
+                                adjusted_traj = sample_traj - np.array([instance["coords"][0], instance["coords"][1], 0.0, 0.0])
+                                reflectx2_traj = adjusted_traj * np.array([1.0, -1.0, 1.0, 1.0])
+                                reflectx2_traj[:, 3] = 2*math.pi - reflectx2_traj[:, 3]
+                                reflectx3_traj = adjusted_traj * np.array([-1.0, -1.0, 1.0, 1.0])
+                                reflectx3_traj[:, 3] = math.pi + reflectx3_traj[:, 3]
+                                reflectx4_traj = adjusted_traj * np.array([-1.0, 1.0, 1.0, 1.0])
+                                reflectx4_traj[:, 3] = math.pi - reflectx4_traj[:, 3]
                                 
-                                reflecty1_traj = adjusted_traj[:, [1, 0, 2]]
-                                reflecty2_traj = reflectx1_traj[:, [1, 0, 2]]
-                                reflecty3_traj = reflectx2_traj[:, [1, 0, 2]]
-                                reflecty4_traj = reflectx3_traj[:, [1, 0, 2]]
+                                reflecty1_traj = adjusted_traj[:, [1, 0, 2, 3]]
+                                reflecty2_traj = reflectx2_traj[:, [1, 0, 2, 3]]
+                                reflecty3_traj = reflectx3_traj[:, [1, 0, 2, 3]]
+                                reflecty4_traj = reflectx4_traj[:, [1, 0, 2, 3]]
+
+                                
+                                condition = adjusted_traj[:, 3] > np.pi
+                                reflecty1_traj = adjusted_traj.copy() 
+                                reflecty1_traj[condition, 3] = np.asin(np.cos(np.pi - adjusted_traj[condition, 3])) + np.pi
+                                reflecty1_traj[~condition, 3] = np.asin(np.cos(adjusted_traj[~condition, 3]))
+
+                                condition = reflectx2_traj[:, 3] > np.pi
+                                reflecty2_traj = reflectx2_traj.copy() 
+                                reflecty2_traj[condition, 3] = np.asin(np.cos(np.pi - reflectx2_traj[condition, 3])) + np.pi
+                                reflecty2_traj[~condition, 3] = np.asin(np.cos(reflectx2_traj[~condition, 3]))
+
+                                condition = reflectx3_traj[:, 3] > np.pi
+                                reflecty3_traj = reflectx3_traj.copy() 
+                                reflecty3_traj[condition, 3] = np.asin(np.cos(np.pi - reflectx3_traj[condition, 3])) + np.pi
+                                reflecty3_traj[~condition, 3] = np.asin(np.cos(reflectx3_traj[~condition, 3]))
+
+                                condition = reflectx4_traj[:, 3] > np.pi
+                                reflecty4_traj = reflectx4_traj.copy() 
+                                reflecty4_traj[condition, 3] = np.asin(np.cos(np.pi - reflectx4_traj[condition, 3])) + np.pi
+                                reflecty4_traj[~condition, 3] = np.asin(np.cos(reflectx4_traj[~condition, 3]))
                                 
                                 self.data.append(adjusted_traj)  
-                                self.data.append(reflectx1_traj)
                                 self.data.append(reflectx2_traj)
                                 self.data.append(reflectx3_traj)
+                                self.data.append(reflectx4_traj)
                                 
                                 self.data.append(reflecty1_traj)
                                 self.data.append(reflecty2_traj)
@@ -78,37 +108,20 @@ class ParkingDataset(torch.utils.data.Dataset):
                         else:
                             not_parked += 1
                         instance_token = instance["next"]
-        self.data = np.array(self.data)
+        self.data = np.array(self.data, dtype=np.float32)
 
-    #WILL UTILIZE IF IMPLEMENT HORIZON BASED APPROACH
-
-    # def make_indices(self, path_lengths, horizon):
-    #     '''
-    #         makes indices for sampling from dataset;
-    #         each index maps to a datapoint
-    #     '''
-    #     indices = []
-    #     for i, path_length in enumerate(path_lengths):
-    #         max_start = min(path_length - 1, self.max_path_length - horizon)
-    #         if not self.use_padding:
-    #             max_start = min(max_start, path_length - horizon)
-    #         for start in range(max_start):
-    #             end = start + horizon
-    #             indices.append((i, start, end))
-    #     indices = np.array(indices)
-    #     return indices
-
+    #WILL NEED TO MODIFY IF DECIDE FOR HORIZON BASED APPROACH
     def get_conditions(self, observation):
-        return {0: observations[0], 
-               len(observations) - 1: observation[-1]}
+        return {0: observation[0], 
+               len(observation) - 1: observation[-1]}
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx, eps=1e-4):
-        observations = self.data[idx] 
+        trajectory = self.data[idx] 
 
-        conditions = self.get_conditions(observations)
-        batch = Batch(observations, conditions)
+        conditions = self.get_conditions(trajectory[:,:2])
+        batch = Batch(trajectory, conditions)
         return batch
 

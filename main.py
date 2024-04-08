@@ -1,12 +1,13 @@
 import math
 import numpy as np
+import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import einops
 from diffusion import GaussianDiffusion
 from infra import TemporalUnet, ResidualTemporalBlock
-from utils import GaussianNormalizer, batch_to_device
+from utils import LimitsNormalizer, batch_to_device
 import pickle
 from dataset import ParkingDataset
 from torch.utils.data import DataLoader, TensorDataset
@@ -43,10 +44,11 @@ class Trainer(object):
         dataset,
         ema_decay=0.995,
         train_batch_size=32,
-        train_lr=2e-5,
+        train_lr=2e-4,
         gradient_accumulate_every=2,
         step_start_ema=2000,
-        update_ema_every=10,
+        update_ema_every=50,
+        log_freq=200
     ):
         super().__init__()
         self.model = diffusion_model
@@ -65,10 +67,6 @@ class Trainer(object):
         ))
         self.optimizer = torch.optim.Adam(diffusion_model.parameters(), lr=train_lr)
 
-        self.logdir = results_folder
-        self.bucket = bucket
-        self.n_reference = n_reference
-
         self.reset_parameters()
         self.step = 0
 
@@ -86,46 +84,52 @@ class Trainer(object):
     #-----------------------------------------------------------------------------#
 
     def train(self, n_train_steps):
-
-        timer = Timer()
         for step in range(n_train_steps):
             for i in range(self.gradient_accumulate_every):
                 batch = next(self.dataloader)
-                batch = batch_to_device(batch)
+                batch = batch_to_device(batch, device='cuda:0')
 
-                loss, infos = self.model.loss(*batch)
+                loss, infos = self.model.loss(*batch, i = self.step, unorm=self.dataset.normalizer)
                 loss = loss / self.gradient_accumulate_every
                 loss.backward()
 
             self.optimizer.step()
             self.optimizer.zero_grad()
+            self.step += 1
 
             if self.step % self.update_ema_every == 0:
                 self.step_ema()
+            if self.step % self.log_freq == 0:
+                print(f'{self.step}: {loss:8.4f}')
+
 def main():
-    old_action_dim = 6
-    old_observation_dim = 17
-    horizon = 4
-    state_file_contents = torch.load("state_800000.pt", map_location=torch.device('cpu'))
+    old_action_dim = 3
+    old_observation_dim = 3
+    old_transition_dim = old_observation_dim + old_action_dim
+    old_horizon = 384
+    state_file_contents = torch.load("state_840000.pt")
     model_params = state_file_contents["model"]
     ema_params = state_file_contents["ema"]
 
-
-    temporal_net = TemporalUnet(horizon, old_action_dim + old_observation_dim, old_observation_dim, dim_mults=(1, 4, 8), attention=True)
-    new_diffusion_model = GaussianDiffusion(temporal_net, horizon, old_observation_dim, old_action_dim, loss_type="l2", predict_epsilon=False, action_weight=10, n_timesteps=20)
+    # experiment with linear attention layer
+    temporal_net = TemporalUnet(old_horizon, old_transition_dim, dim_mults=(1, 4, 8))
+    new_diffusion_model = GaussianDiffusion(temporal_net, old_horizon, old_observation_dim, old_action_dim, loss_type="l2", predict_epsilon=False, action_weight=1, n_timesteps=256)
     new_diffusion_model.load_state_dict(model_params)
+
     new_diffusion_model.action_dim = 1
     new_diffusion_model.observation_dim = 2
     #Add new residual block as first layer
     new_diffusion_model.model.downs[0][0] = ResidualTemporalBlock(new_diffusion_model.action_dim + new_diffusion_model.observation_dim, 32, 32, 4)
     #Change final conv block
     new_diffusion_model.model.final_conv[-1] = nn.Conv1d(32, new_diffusion_model.action_dim + new_diffusion_model.observation_dim, 1)
-    parking_dataset = ParkingDataset(32, False, GaussianNormalizer)
-    print(parking_dataset.data)
+    new_diffusion_model.to("cuda:0")
+    parking_dataset = ParkingDataset(32, False, LimitsNormalizer)
+    print("Dims of DLP dataset: " + str(parking_dataset.data.shape))
     diffusion_trainer = Trainer(new_diffusion_model, parking_dataset)
     n_epochs = 50
-    for i in range(50):
-        diffusion_trainer.train(3000) 
+    n_train_steps = 1200
+    for i in range(n_epochs):
+        diffusion_trainer.train(n_train_steps) 
 
 
 main()

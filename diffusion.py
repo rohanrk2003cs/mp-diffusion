@@ -2,6 +2,7 @@ from collections import namedtuple
 import numpy as np
 import torch
 from torch import nn
+import torch.nn.functional as F
 import pdb
 from utils import (
     cosine_beta_schedule,
@@ -23,9 +24,10 @@ class WeightedLoss(nn.Module):
                 [ batch_size x horizon x transition_dim ]
         '''
         loss = self._loss(pred, targ)
-        weighted_loss = (loss * self.weights).mean()
-        a0_loss = (loss[:, 0, :self.action_dim] / self.weights[0, :self.action_dim]).mean()
-        return weighted_loss, {'a0_loss': a0_loss}
+        # weighted_loss = (loss * self.weights).mean()
+        loss = loss.mean()
+        # a0_loss = (loss[:, 0, :self.action_dim] / self.weights[0, :self.action_dim]).mean()
+        return loss, {'a0_loss': None}
 class WeightedL1(WeightedLoss):
 
     def _loss(self, pred, targ):
@@ -67,7 +69,7 @@ def make_timesteps(batch_size, i, device):
 
 class GaussianDiffusion(nn.Module):
     def __init__(self, model, horizon, observation_dim, action_dim, n_timesteps=1000,
-        loss_type='l1', clip_denoised=False, predict_epsilon=True,
+        loss_type='l2', clip_denoised=False, predict_epsilon=True,
         action_weight=1.0, loss_discount=1.0, loss_weights=None,
     ):
         super().__init__()
@@ -229,14 +231,14 @@ class GaussianDiffusion(nn.Module):
 
         return sample
 
-    def p_losses(self, x_start, cond, t):
+    def p_losses(self, x_start, cond, t, i,unorm = None):
         noise = torch.randn_like(x_start)
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        x_noisy = apply_conditioning(x_noisy, cond, self.action_dim)
+        x_noisy = apply_conditioning(x_noisy, cond, self.observation_dim)
 
         x_recon = self.model(x_noisy, cond, t)
-        x_recon = apply_conditioning(x_recon, cond, self.action_dim)
+        x_recon = apply_conditioning(x_recon, cond, self.observation_dim)
 
         assert noise.shape == x_recon.shape
 
@@ -244,13 +246,25 @@ class GaussianDiffusion(nn.Module):
             loss, info = self.loss_fn(x_recon, noise)
         else:
             loss, info = self.loss_fn(x_recon, x_start)
+        if i % 5000 == 0 and i >=1000:
+            print("original trajectory:")
+            # Ensure x_start is on CPU and convert to NumPy array
+            x_start_cpu_np = x_start.detach().cpu().numpy() if x_start.is_cuda else x_start.numpy()
+            # Call unnormalize with the NumPy array
+            print(unorm.unnormalize(x_start_cpu_np, eps=1e-4)[0])
+
+            print("reconstructed trajectory:")
+            # Ensure x_recon is on CPU and convert to NumPy array
+            x_recon_cpu_np = x_recon.detach().cpu().numpy() if x_recon.is_cuda else x_recon.numpy()
+            # Call unnormalize with the NumPy array
+            print(unorm.unnormalize(x_recon_cpu_np, eps=1e-4)[0])
 
         return loss, info
 
-    def loss(self, x, *args):
+    def loss(self, x, *args, i, unorm=None):
         batch_size = len(x)
         t = torch.randint(0, self.n_timesteps, (batch_size,), device=x.device).long()
-        return self.p_losses(x, *args, t)
+        return self.p_losses(x, *args, t, i=i, unorm=unorm)
 
     def forward(self, cond, *args, **kwargs):
         return self.conditional_sample(cond, *args, **kwargs)
