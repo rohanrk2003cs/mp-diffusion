@@ -75,22 +75,18 @@ class ParkingDataset(torch.utils.data.Dataset):
 
                                 
                                 condition = adjusted_traj[:, 3] > np.pi
-                                reflecty1_traj = adjusted_traj.copy() 
                                 reflecty1_traj[condition, 3] = np.asin(np.cos(np.pi - adjusted_traj[condition, 3])) + np.pi
                                 reflecty1_traj[~condition, 3] = np.asin(np.cos(adjusted_traj[~condition, 3]))
 
                                 condition = reflectx2_traj[:, 3] > np.pi
-                                reflecty2_traj = reflectx2_traj.copy() 
                                 reflecty2_traj[condition, 3] = np.asin(np.cos(np.pi - reflectx2_traj[condition, 3])) + np.pi
                                 reflecty2_traj[~condition, 3] = np.asin(np.cos(reflectx2_traj[~condition, 3]))
 
                                 condition = reflectx3_traj[:, 3] > np.pi
-                                reflecty3_traj = reflectx3_traj.copy() 
                                 reflecty3_traj[condition, 3] = np.asin(np.cos(np.pi - reflectx3_traj[condition, 3])) + np.pi
                                 reflecty3_traj[~condition, 3] = np.asin(np.cos(reflectx3_traj[~condition, 3]))
 
                                 condition = reflectx4_traj[:, 3] > np.pi
-                                reflecty4_traj = reflectx4_traj.copy() 
                                 reflecty4_traj[condition, 3] = np.asin(np.cos(np.pi - reflectx4_traj[condition, 3])) + np.pi
                                 reflecty4_traj[~condition, 3] = np.asin(np.cos(reflectx4_traj[~condition, 3]))
                                 

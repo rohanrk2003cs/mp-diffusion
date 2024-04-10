@@ -89,7 +89,7 @@ class Trainer(object):
                 batch = next(self.dataloader)
                 batch = batch_to_device(batch, device='cuda:0')
 
-                loss, infos = self.model.loss(*batch, i = self.step, unorm=self.dataset.normalizer)
+                loss, infos = self.model.loss(*batch)
                 loss = loss / self.gradient_accumulate_every
                 loss.backward()
 
@@ -116,7 +116,7 @@ def main():
     new_diffusion_model = GaussianDiffusion(temporal_net, old_horizon, old_observation_dim, old_action_dim, loss_type="l2", predict_epsilon=False, action_weight=1, n_timesteps=256)
     new_diffusion_model.load_state_dict(model_params)
 
-    new_diffusion_model.action_dim = 1
+    new_diffusion_model.action_dim = 2
     new_diffusion_model.observation_dim = 2
     #Add new residual block as first layer
     new_diffusion_model.model.downs[0][0] = ResidualTemporalBlock(new_diffusion_model.action_dim + new_diffusion_model.observation_dim, 32, 32, 4)
@@ -129,7 +129,8 @@ def main():
     n_epochs = 50
     n_train_steps = 1200
     for i in range(n_epochs):
-        diffusion_trainer.train(n_train_steps) 
+        diffusion_trainer.train(n_train_steps)
+    torch.save(diffusion_trainer.model, "diff_state.pt")
 
 
 main()

@@ -231,7 +231,7 @@ class GaussianDiffusion(nn.Module):
 
         return sample
 
-    def p_losses(self, x_start, cond, t, i,unorm = None):
+    def p_losses(self, x_start, cond, t):
         noise = torch.randn_like(x_start)
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
@@ -246,18 +246,6 @@ class GaussianDiffusion(nn.Module):
             loss, info = self.loss_fn(x_recon, noise)
         else:
             loss, info = self.loss_fn(x_recon, x_start)
-        if i % 5000 == 0 and i >=1000:
-            print("original trajectory:")
-            # Ensure x_start is on CPU and convert to NumPy array
-            x_start_cpu_np = x_start.detach().cpu().numpy() if x_start.is_cuda else x_start.numpy()
-            # Call unnormalize with the NumPy array
-            print(unorm.unnormalize(x_start_cpu_np, eps=1e-4)[0])
-
-            print("reconstructed trajectory:")
-            # Ensure x_recon is on CPU and convert to NumPy array
-            x_recon_cpu_np = x_recon.detach().cpu().numpy() if x_recon.is_cuda else x_recon.numpy()
-            # Call unnormalize with the NumPy array
-            print(unorm.unnormalize(x_recon_cpu_np, eps=1e-4)[0])
 
         return loss, info
 
